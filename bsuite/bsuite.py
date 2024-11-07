@@ -15,7 +15,7 @@
 # ============================================================================
 """Functions to load bsuite environments."""
 
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping, Tuple, Dict, List
 
 from bsuite import sweep
 from bsuite.environments import base
@@ -43,9 +43,11 @@ from bsuite.experiments.mountain_car_scale import mountain_car_scale
 from bsuite.experiments.umbrella_distract import umbrella_distract
 from bsuite.experiments.umbrella_length import umbrella_length
 
-from bsuite.logging import csv_logging
+from bsuite.logging import csv_logging, wandb_logging
 from bsuite.logging import sqlite_logging
 from bsuite.logging import terminal_logging
+
+from bsuite.utils.wrappers import TimeSeriesObservation
 
 import dm_env
 import termcolor
@@ -83,55 +85,60 @@ EXPERIMENT_NAME_TO_ENVIRONMENT = dict(
 
 
 def unpack_bsuite_id(bsuite_id: str) -> Tuple[str, int]:
-  """Returns the experiment name and setting index given a bsuite_id."""
-  parts = bsuite_id.split(sweep.SEPARATOR)
-  assert len(parts) == 2
-  experiment_name = parts[0]
-  setting_index = int(parts[1])
-  return experiment_name, setting_index
+    """Returns the experiment name and setting index given a bsuite_id."""
+    parts = bsuite_id.split(sweep.SEPARATOR)
+    assert len(parts) == 2
+    experiment_name = parts[0]
+    setting_index = int(parts[1])
+    return experiment_name, setting_index
 
 
 def load(
-    experiment_name: str,
-    kwargs: Mapping[str, Any],
+        experiment_name: str,
+        kwargs: Mapping[str, Any],
 ) -> base.Environment:
-  """Returns a bsuite environment given an experiment name and settings."""
-  return EXPERIMENT_NAME_TO_ENVIRONMENT[experiment_name](**kwargs)
+    """Returns a bsuite environment given an experiment name and settings."""
+    return EXPERIMENT_NAME_TO_ENVIRONMENT[experiment_name](**kwargs)
 
 
-def load_from_id(bsuite_id: str) -> base.Environment:
-  """Returns a bsuite environment given a bsuite_id."""
-  kwargs = sweep.SETTINGS[bsuite_id]
-  experiment_name, _ = unpack_bsuite_id(bsuite_id)
-  env = load(experiment_name, kwargs)
-  termcolor.cprint(
-      f'Loaded bsuite_id: {bsuite_id}.', color='white', attrs=['bold'])
-  return env
+def load_from_id(bsuite_id: str, type='time_series') -> base.Environment:
+    """Returns a bsuite environment given a bsuite_id."""
+    kwargs = sweep.SETTINGS[bsuite_id]
+    experiment_name, _ = unpack_bsuite_id(bsuite_id)
+    env = load(experiment_name, kwargs)
+
+    # This is a time-series env based refactor of bsuite, so wrap the env with the time-series wrapper
+    if type == 'time_series':
+
+        env = TimeSeriesObservation(env)
+    termcolor.cprint(
+        f'Loaded bsuite_id: {bsuite_id}.', color='white', attrs=['bold'])
+    return env
 
 
 def load_and_record(bsuite_id: str,
                     save_path: str,
                     logging_mode: str = 'csv',
                     overwrite: bool = False) -> dm_env.Environment:
-  """Returns a bsuite environment wrapped with either CSV or SQLite logging."""
-  if logging_mode == 'csv':
-    return load_and_record_to_csv(bsuite_id, save_path, overwrite)
-  elif logging_mode == 'sqlite':
-    if not save_path.endswith('.db'):
-      save_path += '.db'
-    if overwrite:
-      print('WARNING: overwrite option is ignored for SQLite logging.')
-    return load_and_record_to_sqlite(bsuite_id, save_path)
-  elif logging_mode == 'terminal':
-    return load_and_record_to_terminal(bsuite_id)
-  else:
-    raise ValueError((f'Unrecognised logging_mode "{logging_mode}". '
-                      'Must be "csv", "sqlite", or "terminal".'))
+    """Returns a bsuite environment wrapped with either CSV or SQLite logging."""
+    if logging_mode == 'csv':
+        return load_and_record_to_csv(bsuite_id, save_path, overwrite)
+    elif logging_mode == 'sqlite':
+        if not save_path.endswith('.db'):
+            save_path += '.db'
+        if overwrite:
+            print('WARNING: overwrite option is ignored for SQLite logging.')
+        return load_and_record_to_sqlite(bsuite_id, save_path)
+    elif logging_mode == 'terminal':
+        return load_and_record_to_terminal(bsuite_id)
+    else:
+        raise ValueError((f'Unrecognised logging_mode "{logging_mode}". '
+                          'Must be "csv", "sqlite", or "terminal".'))
 
 
 def load_and_record_to_sqlite(bsuite_id: str,
                               db_path: str) -> dm_env.Environment:
-  """Returns a bsuite environment that saves results to an SQLite database.
+    """Returns a bsuite environment that saves results to an SQLite database.
 
   The returned environment will automatically save the results required for
   the analysis notebook when stepping through the environment.
@@ -156,24 +163,24 @@ def load_and_record_to_sqlite(bsuite_id: str,
   Returns:
     A bsuite environment determined by the bsuite_id.
   """
-  raw_env = load_from_id(bsuite_id)
-  experiment_name, setting_index = unpack_bsuite_id(bsuite_id)
-  termcolor.cprint(
-      f'Logging results to SQLite database in {db_path}.',
-      color='yellow',
-      attrs=['bold'])
-  return sqlite_logging.wrap_environment(
-      env=raw_env,
-      db_path=db_path,
-      experiment_name=experiment_name,
-      setting_index=setting_index,
-  )
+    raw_env = load_from_id(bsuite_id)
+    experiment_name, setting_index = unpack_bsuite_id(bsuite_id)
+    termcolor.cprint(
+        f'Logging results to SQLite database in {db_path}.',
+        color='yellow',
+        attrs=['bold'])
+    return sqlite_logging.wrap_environment(
+        env=raw_env,
+        db_path=db_path,
+        experiment_name=experiment_name,
+        setting_index=setting_index,
+    )
 
 
 def load_and_record_to_csv(bsuite_id: str,
                            results_dir: str,
                            overwrite: bool = False) -> dm_env.Environment:
-  """Returns a bsuite environment that saves results to CSV.
+    """Returns a bsuite environment that saves results to CSV.
 
   To load the results, specify the file path in the provided notebook, or to
   manually inspect the results use:
@@ -194,22 +201,59 @@ def load_and_record_to_csv(bsuite_id: str,
   Returns:
     A bsuite environment determined by the bsuite_id.
   """
-  raw_env = load_from_id(bsuite_id)
-  termcolor.cprint(
-      f'Logging results to CSV file for each bsuite_id in {results_dir}.',
-      color='yellow',
-      attrs=['bold'])
-  return csv_logging.wrap_environment(
-      env=raw_env,
-      bsuite_id=bsuite_id,
-      results_dir=results_dir,
-      overwrite=overwrite,
-  )
+    raw_env = load_from_id(bsuite_id)
+    termcolor.cprint(
+        f'Logging results to CSV file for each bsuite_id in {results_dir}.',
+        color='yellow',
+        attrs=['bold'])
+    return csv_logging.wrap_environment(
+        env=raw_env,
+        bsuite_id=bsuite_id,
+        results_dir=results_dir,
+        overwrite=overwrite,
+    )
+
+
+def load_and_record_to_wandb(bsuite_id: str, max_episode_length, project_name: str, project_entity: str, project_group: str,
+                             project_config: Dict[str, Any] = None, project_tags: List[str] = None,
+                             overwrite: bool = False) -> dm_env.Environment:
+    """Returns a bsuite environment that logs to Weights and Biases (wandb).
+
+    Args:
+        bsuite_id: The bsuite id identifying the environment to return. For example,
+            "catch/0" or "deep_sea/3".
+        project_name: The name of the wandb project.
+        project_entity: The entity of the wandb project.
+        project_group: The group of the wandb project.
+        project_config: The configuration of the wandb project.
+        project_tags: The tags of the wandb project.
+        overwrite: Whether to overwrite existing wandb runs if found.
+
+    Returns:
+        A bsuite environment determined by the bsuite_id.
+    """
+
+    raw_env = load_from_id(bsuite_id)
+
+    termcolor.cprint(
+        f'Logging results to Weights and Biases (wandb).',
+        color='yellow',
+        attrs=['bold'])
+    return wandb_logging.wrap_environment(
+        env=raw_env,
+        bsuite_id=bsuite_id,
+        project_name=project_name,
+        project_entity=project_entity,
+        project_group=project_group,
+        project_config=project_config,
+        project_tags=project_tags,
+        overwrite=overwrite,
+    )
 
 
 def load_and_record_to_terminal(bsuite_id: str) -> dm_env.Environment:
-  """Returns a bsuite environment that logs to terminal."""
-  raw_env = load_from_id(bsuite_id)
-  termcolor.cprint(
-      'Logging results to terminal.', color='yellow', attrs=['bold'])
-  return terminal_logging.wrap_environment(raw_env)
+    """Returns a bsuite environment that logs to terminal."""
+    raw_env = load_from_id(bsuite_id)
+    termcolor.cprint(
+        'Logging results to terminal.', color='yellow', attrs=['bold'])
+    return terminal_logging.wrap_environment(raw_env)

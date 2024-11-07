@@ -23,3 +23,4 @@ load_from_id = _bsuite.load_from_id
 load_and_record = _bsuite.load_and_record
 load_and_record_to_sqlite = _bsuite.load_and_record_to_sqlite
 load_and_record_to_csv = _bsuite.load_and_record_to_csv
+load_and_record_to_wandb = _bsuite.load_and_record_to_wandb
